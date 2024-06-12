@@ -1,15 +1,21 @@
+
+
+# ----------------------------------------------------------------
+
 version: '3.7'
 services:
   zookeeper:
     image: wurstmeister/zookeeper:3.4.6
     ports:
       - "2181:2181"
+    networks:
+      - es-net
 
   kafka:
     image: wurstmeister/kafka:2.12-2.2.1
     ports:
       - "9092:9092"
-      - "9093:9093" # Port for OUTSIDE listener
+      - "9093:9093"
     environment:
       KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9092,OUTSIDE://localhost:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
@@ -20,52 +26,167 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     depends_on:
       - zookeeper
+    networks:
+      - es-net
 
-  hadoop-namenode:
-    image: bde2020/hadoop-namenode:2.0.0-hadoop2.7.4-java8
-    volumes:
-      - hadoop_namenode:/hadoop/dfs/name
-    # environment:
-    #   - CLUSTER_NAME=test
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    hostname: namenode
     ports:
-      - "50070:50070"
+      - 9870:9870
+      - 9000:9000
     environment:
-      - CLUSTER_NAME=test
-      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:9000
-      - CORE_CONF_hadoop_http_staticuser_user=root
-      - CORE_CONF_hadoop_proxyuser_hue_hosts=*
-      - CORE_CONF_hadoop_proxyuser_hue_groups=*
-      - HDFS_CONF_dfs_webhdfs_enabled=true
-      - HDFS_CONF_dfs_permissions_enabled=false
-
-  hadoop-datanode:
-    image: bde2020/hadoop-datanode:2.0.0-hadoop2.7.4-java8
+      - CLUSTER_NAME=stock
+    env_file:
+      - ./hadoop/hadoop.env
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
     volumes:
-      - hadoop_datanode:/hadoop/dfs/data
-    environment:
-      - SERVICE_PRECONDITION=hadoop-namenode:50070
-    links:
-      - hadoop-namenode
-    depends_on:
-      - hadoop-namenode
+      - ./storage/hadoop/namenode:/hadoop/dfs/name
+      - ./data:/data
+    networks:
+      - es-net
 
-  spark:
-    image: bitnami/spark:latest
+  datanode-1:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode-1
+    hostname: datanode-1
+    ports:
+      - 9864:9864
+
     environment:
-      - SPARK_MODE=master
+      - SERVICE_PRECONDITION=namenode:9870
+
+    env_file:
+      - ./hadoop/hadoop.env
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - ./storage/hadoop/datanode-1:/hadoop/dfs/data
+    networks:
+      - es-net
+
+  datanode-2:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode-2
+    hostname: datanode-2
+    ports:
+      - 50075:9864
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+    env_file:
+      - ./hadoop/hadoop.env
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - ./storage/hadoop/datanode-2:/hadoop/dfs/data
+    networks:
+      - es-net
+
+  datanode-3:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode-3
+    hostname: datanode-3
+    ports:
+      - 29864:9864
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+    env_file:
+      - ./hadoop/hadoop.env
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - ./storage/hadoop/datanode-3:/hadoop/dfs/data
+    networks:
+      - es-net
+
+  resourcemanager:
+    image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    container_name: resourcemanager
+    restart: always
+    environment:
+      SERVICE_PRECONDITION: "namenode:9000 namenode:9870 datanode-1:9864"
+    env_file:
+      - ./hadoop/hadoop.env
+    networks:
+      - es-net
+
+  nodemanager:
+    image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    container_name: nodemanager
+    restart: always
+    environment:
+      SERVICE_PRECONDITION: "namenode:9000 namenode:9870 datanode-1:9864 resourcemanager:8088"
+    env_file:
+      - ./hadoop/hadoop.env
+    networks:
+      - es-net
+
+  spark-master:
+    image: bde2020/spark-master:3.0.0-hadoop3.2
+    # build:
+    #   context: ./docker_image/spark
+    #   dockerfile: ./Dockerfile
+    container_name: spark-master
+    depends_on:
+      - namenode
+      - datanode-1
+      # - datanode-2
+      # - datanode-3
     ports:
       - "8080:8080"
+      - "7077:7077"
+    environment:
+      - INIT_DAEMON_STEP=setup_spark
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    volumes:
+      - ./spark-master:/fileMount
+    networks:
+      - es-net
+
+  spark-worker:
+    image: bde2020/spark-worker:3.0.0-hadoop3.2
+    container_name: spark-worker
     depends_on:
-      - hadoop-namenode
-      - hadoop-datanode
+      - spark-master
+    ports:
+      - "8081:8081"
+    environment:
+      - "SPARK_MASTER=spark://spark-master:7077"
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    volumes:
+      - ./spark-master:/fileMount
+    networks:
+      - es-net
+
+  jupyter:
+    image: jupyter/base-notebook:latest
+    volumes:
+      - ./notebooks:/home/jovyan/work
+    ports:
+      - "8888:8888"
+    networks:
+      - es-net
 
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:7.6.2
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.10.0
     environment:
       - discovery.type=single-node
     ports:
       - "9200:9200"
       - "9300:9300"
+    networks:
+      - es-net
 
   kibana:
     image: docker.elastic.co/kibana/kibana:7.6.2
@@ -73,7 +194,227 @@ services:
       - "5601:5601"
     depends_on:
       - elasticsearch
+    networks:
+      - es-net
+
+networks:
+  es-net:
+    driver: bridge
 
 volumes:
   hadoop_namenode:
   hadoop_datanode:
+
+# ----------------------------------------------------------------
+
+
+# version: '3.7'
+# services:
+#   zookeeper:
+#     image: wurstmeister/zookeeper:3.4.6
+#     ports:
+#       - "2181:2181"
+
+#   kafka:
+#     image: wurstmeister/kafka:2.12-2.2.1
+#     ports:
+#       - "9092:9092"
+#       - "9093:9093" # Port for OUTSIDE listener
+#     environment:
+#       KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9092,OUTSIDE://localhost:9093
+#       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
+#       KAFKA_LISTENERS: INSIDE://0.0.0.0:9092,OUTSIDE://0.0.0.0:9093
+#       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+#       KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+#       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+#       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+#     depends_on:
+#       - zookeeper
+
+#     # hadoop-namenode:
+#     #   image: bde2020/hadoop-namenode:2.0.0-hadoop2.7.4-java8
+#     #   volumes:
+#     #     - hadoop_namenode:/hadoop/dfs/name
+#     #   # environment:
+#     #   #   - CLUSTER_NAME=test
+#     #   ports:
+#     #     - "50070:50070"
+#     #   environment:
+#     #     - CLUSTER_NAME=test
+#     #     - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:9000
+#     #     - CORE_CONF_hadoop_http_staticuser_user=root
+#     #     - CORE_CONF_hadoop_proxyuser_hue_hosts=*
+#     #     - CORE_CONF_hadoop_proxyuser_hue_groups=*
+#     #     - HDFS_CONF_dfs_webhdfs_enabled=true
+#     #     - HDFS_CONF_dfs_permissions_enabled=false
+
+#     # hadoop-datanode:
+#     #   image: bde2020/hadoop-datanode:2.0.0-hadoop2.7.4-java8
+#     #   volumes:
+#     #     - hadoop_datanode:/hadoop/dfs/data
+#     #   environment:
+#     #     - SERVICE_PRECONDITION=hadoop-namenode:50070
+#     #   links:
+#     #     - hadoop-namenode
+#     #   depends_on:
+#     #     - hadoop-
+    
+#   namenode:
+#     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+#     container_name: namenode
+#     hostname: namenode
+#     ports:
+#       - 9870:9870
+#       - 9000:9000
+#     environment:
+#       - CLUSTER_NAME=stock
+#     env_file:
+#       - ./hadoop/hadoop.env
+#     volumes:
+#       - ./storage/hadoop/namenode:/hadoop/dfs/name
+#       - ./data:/data
+#     networks:
+#       - es-net
+
+#   datanode-1:
+#     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+#     container_name: datanode-1
+#     hostname: datanode-1
+#     ports:
+#       - 9864:9864
+#     environment:
+#       - SERVICE_PRECONDITION=namenode:9870
+#     env_file:
+#       - ./hadoop/hadoop.env
+#     volumes:
+#       - ./storage/hadoop/datanode-1:/hadoop/dfs/data
+#     networks:
+#       - es-net
+
+#   datanode-2:
+#     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+#     container_name: datanode-2
+#     hostname: datanode-2
+#     ports:
+#       - 50075:9864
+#     environment:
+#       - SERVICE_PRECONDITION=namenode:9870
+#     env_file:
+#       - ./hadoop/hadoop.env
+#     volumes:
+#       - ./storage/hadoop/datanode-2:/hadoop/dfs/data
+#     networks:
+#       - es-net
+
+#   datanode-3:
+#     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+#     container_name: datanode-3
+#     hostname: datanode-3
+#     ports:
+#       - 29864:9864
+#     environment:
+#       - SERVICE_PRECONDITION=namenode:9870
+#     env_file:
+#       - ./hadoop/hadoop.env
+#     volumes:
+#       - ./storage/hadoop/datanode-3:/hadoop/dfs/data
+#     networks:
+#       - es-net
+
+#   resourcemanager:
+#     image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+#     container_name: resourcemanager
+#     restart: always
+#     environment:
+#       SERVICE_PRECONDITION: "namenode:9000 namenode:9870 datanode-1:9864"
+#     env_file:
+#       - ./hadoop/hadoop.env
+#     networks:
+#       - es-net
+
+#   nodemanager:
+#     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+#     container_name: nodemanager
+#     restart: always
+#     environment:
+#       SERVICE_PRECONDITION: "namenode:9000 namenode:9870 datanode-1:9864 resourcemanager:8088"
+#     env_file:
+#       - ./hadoop/hadoop.env
+#     networks:
+#       - es-net
+
+
+#   # spark:
+#   #   image: bitnami/spark:latest
+#   #   environment:
+#   #     - SPARK_MODE=master
+#   #   ports:
+#   #     - "8080:8080"
+#   #   depends_on:
+#   #     - hadoop-namenode
+#   #     - hadoop-datanode
+#   #   volumes:
+#   #     - ./spark:/opt/spark
+#   spark-master:
+#     image: bde2020/spark-master:3.0.0-hadoop3.2
+#     container_name: spark-master
+#     depends_on:
+#       - namenode
+#       - datanode-1
+#       - datanode-2
+#       - datanode-3
+#     ports:
+#       - "8080:8080"
+#       - "7077:7077"
+#     environment:
+#       - INIT_DAEMON_STEP=setup_spark
+#       - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+#     networks:
+#       - es-net
+
+#   spark-worker:
+#     image: bde2020/spark-worker:3.0.0-hadoop3.2
+#     container_name: spark-worker
+#     depends_on:
+#       - spark-master
+#     ports:
+#       - "8081:8081"
+#     environment:
+#       - "SPARK_MASTER=spark://spark-master:7077"
+#       - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+#     networks:
+#       - es-net
+
+
+#   jupyter:
+#     image: jupyter/base-notebook:latest
+#     volumes:
+#       - ./notebooks:/home/jovyan/work
+#     ports:
+#       - "8888:8888"
+
+#   elasticsearch:
+#     image: docker.elastic.co/elasticsearch/elasticsearch:7.10.0
+#     environment:
+#       - discovery.type=single-node
+#     ports:
+#       - "9200:9200"
+#       - "9300:9300"
+#     networks:
+#       - es-net
+
+#   kibana:
+#     image: docker.elastic.co/kibana/kibana:7.6.2
+#     ports:
+#       - "5601:5601"
+#     depends_on:
+#       - elasticsearch
+#     networks:
+#       - es-net
+
+# networks:
+#   es-net:
+#     driver: bridge
+# volumes:
+#   hadoop_namenode:
+#   hadoop_datanode:

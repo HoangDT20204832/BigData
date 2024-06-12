@@ -1,0 +1,24 @@
+docker-compose up -d
+docker ps
+docker exec -it [id] bash
+
+///////////tạo thư mục trên hdfs 
+docker exec -it namenode hdfs dfs -mkdir /dataFoler
+
+///////////tải tệp từ local lên hdfs: 
+Vào exec của namnode rồi chạy lệnh
+hadoop fs -copyFromLocal /data/final_data.csv /data1
+
+
+ls -lart 
+df.printSchema
+df.select("age").show()
+
+find / -name spark-submit
+/spark/bin/spark-submit /fileMount/producer.py
+/spark/bin/spark-submit /fileMount/consumer.py
+
+//kiểm tra địa chỉ ip m à container đang chạy
+docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container_id>   
+
+

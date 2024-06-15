@@ -6,7 +6,7 @@ from hdfs import InsecureClient
 import hashlib
 
 # Kết nối đến HDFS
-hdfs_client = InsecureClient('http://172.18.0.5:9000', user='root')
+hdfs_client = InsecureClient('hdfs://localhost:9000', user='root')
 
 # # Đường dẫn tới file trên HDFS
 hdfs_path = '/dataFolder/final_data.csv'

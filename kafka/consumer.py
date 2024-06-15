@@ -97,11 +97,11 @@ def process_and_save_to_es(df, epoch_id):
         
         es.index(index="real_estate_analysis_estate_type_ratio", id=estate_type_name, body={"doc": estate_type_ratio_data, "doc_as_upsert": True})
 
-    # for record in price_trend_dict:
-    #     price_trend_data = json.loads(record)
-    #     year_value = price_trend_data["year"]
+    for record in price_trend_dict:
+        price_trend_data = json.loads(record)
+        year_value = price_trend_data["year"]
         
-    #     es.index(index="real_estate_analysis_price_trend", id=year_value, body={"doc": price_trend_data, "doc_as_upsert": True})
+        es.index(index="real_estate_analysis_price_trend", id=year_value, body={"doc": price_trend_data, "doc_as_upsert": True})
 
     for record in district_density_dict:
         district_density_data = json.loads(record)
